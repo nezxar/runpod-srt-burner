@@ -1,10 +1,10 @@
 FROM python:3.10-slim
 
-# SSL + FFmpeg + FontConfig (لإدارة الخطوط)
+# SSL + FFmpeg + خط افتراضي لليباَس
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ffmpeg ca-certificates fontconfig && \ 
-    apt-get clean && \
+        ffmpeg ca-certificates fonts-dejavu-core && \
+    update-ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONUNBUFFERED=1
@@ -12,14 +12,6 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# ==== !!! إضافة الخط (الطريقة الصحيحة) !!! ====
-# 1. أنشئ مجلد الخطوط (fontconfig يبحث هنا)
-RUN mkdir -p /usr/share/fonts/truetype/custom
-# 2. انسخ ملف الخط
-COPY arial.ttf /usr/share/fonts/truetype/custom/
-# 3. أعد بناء كاش الخطوط (مهم جداً لـ ffmpeg)
-RUN fc-cache -f -v
 
 COPY handler.py .
 
