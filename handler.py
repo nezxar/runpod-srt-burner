@@ -150,14 +150,28 @@ def handler(event):
     sub_path = os.path.join(WORKDIR, f"sub_{job}.srt")
     out_path = os.path.join(WORKDIR, f"out_{job}.mp4")
 
+    # تنزيل الملفات
     http_download(video_url, in_path)
     http_download(srt_url, sub_path)
 
+    # حرق الترجمة
     burn_with_ass(in_path, sub_path, out_path)
 
-    output_key = f"{out_prefix}/{int(time.time())}-{job}.mp4"
-    upload_to_r2(out_path, output_key)
-    download_url = presigned_get_url(output_key, ttl=3600)
+    # منطق الرفع الجديد
+    output_put_url = inp.get("output_put_url")
+    expected_output_key = inp.get("expected_output_key")
+
+    if output_put_url:
+        # ارفع الناتج للـ PUT URL (لا يحتاج مفاتيح R2 داخل العامل)
+        with open(out_path, "rb") as f:
+            requests.put(output_put_url, data=f, headers={"Content-Type": "video/mp4"}, timeout=600)
+        download_url = None  # السيرفر يقدر يولّد read URL لاحقًا
+        output_key = expected_output_key
+    else:
+        # المسار القديم: يتطلب تهيئة R2 داخل العامل
+        output_key = f"{out_prefix}/{int(time.time())}-{job}.mp4"
+        upload_to_r2(out_path, output_key)
+        download_url = presigned_get_url(output_key, ttl=3600)
 
     return {
         "ok": True,
