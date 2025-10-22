@@ -1,6 +1,7 @@
 import os, uuid, time, subprocess, requests, runpod
 import boto3
 from botocore.client import Config
+import re # <-- إضافة جديدة
 
 WORKDIR = "/workspace"
 os.makedirs(WORKDIR, exist_ok=True)
@@ -56,12 +57,119 @@ def ffmpeg_has_nvenc():
     except Exception:
         return False
 
+# ==================== دوال جديدة مأخوذة من server.py ====================
+
+[server.py] def intelligently_wrap_text(text, max_length=45, spacer_size=12, original_font_size=36):
+[server.py]     if len(text) <= max_length:
+[server.py]         return text
+
+[server.py]     words = text.split(' ')
+[server.py]     if not words or len(words) == 1:
+[server.py]         return text
+
+[server.py]     mid_point = len(text) // 2
+[server.py]     best_split_index = -1
+[server.py]     min_distance_from_mid = float('inf')
+    
+[server.py]     current_pos = 0
+[server.py]     for i, word in enumerate(words):
+[server.py]         if i < len(words) - 1:
+[server.py]             split_candidate_pos = current_pos + len(word)
+[server.py]             distance = abs(split_candidate_pos - mid_point)
+            
+[server.py]             if distance < min_distance_from_mid:
+[server.py]                 min_distance_from_mid = distance
+[server.py]                 best_split_index = i + 1
+
+[server.py]         current_pos += len(word) + 1 
+
+[server.py]     if best_split_index != -1:
+[server.py]         line1 = ' '.join(words[:best_split_index])
+[server.py]         line2 = ' '.join(words[best_split_index:])
+[server.py]         return f"{line1}\\N{{\\fs{spacer_size}}} \\N{{\\fs{original_font_size}}}{line2}"
+    else:
+[server.py]         return text
+
+[server.py] def convert_srt_to_ass(srt_content, font_name="Arial", font_size=42): # استخدمنا حجم خط 42
+[server.py]     style_header = f"""[Script Info]
+Title: Translated Subtitles
+ScriptType: v4.00+
+WrapStyle: 0
+PlayResX: 1280
+PlayResY: 720
+YCbCr Matrix: None
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+[server.py] Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2.5,1,2,10,10,35,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    
+[server.py]     ass_lines = []
+[server.py]     srt_blocks = srt_content.strip().replace('\r', '').split('\n\n')
+[server.py]     for block in srt_blocks:
+[server.py]         lines = block.strip().split('\n')
+[server.py]         if len(lines) < 3:
+[server.py]             continue
+        
+[server.py]         time_line = lines[1]
+        try:
+[server.py]             start_str, end_str = time_line.split(' --> ')
+            
+[server.py]             start_h, start_m, start_s_ms = start_str.split(':')
+[server.py]             start_s, start_ms = start_s_ms.split(',')
+[server.py]             start_ass = f"{int(start_h)}:{start_m}:{start_s}.{int(start_ms) // 10:02d}"
+
+[server.py]             end_h, end_m, end_s_ms = end_str.split(':')
+[server.py]             end_s, end_ms = end_s_ms.split(',')
+[server.py]             end_ass = f"{int(end_h)}:{end_m}:{end_s}.{int(end_ms) // 10:02d}"
+
+            # تطبيق التقسيم الذكي
+[server.py]             raw_text = ' '.join(lines[2:])
+[server.py]             text = intelligently_wrap_text(raw_text, max_length=45, spacer_size=12, original_font_size=font_size)
+            
+[server.py]             ass_lines.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
+[server.py]         except ValueError:
+[server.py]             print(f"Skipping malformed SRT block: {block}")
+[server.py]             continue
+
+[server.py]     return style_header + "\n".join(ass_lines)
+
+# ==================== دالة الحرق المعدلة ====================
+
 def burn_subs(input_path, srt_path, output_path, use_nvenc=True, bitrate="8M"):
-    vf = f"subtitles={srt_path}:force_style='FontName=Arial,Outline=2,Shadow=0'"
+    
+    # --- الخطوات الجديدة: تحويل SRT إلى ASS
+    ass_path = os.path.splitext(srt_path)[0] + ".ass"
+    font_dir = "/app/fonts" # المسار الذي حددناه في Dockerfile
+    
+    try:
+        print("Converting SRT to ASS for reliable font rendering...")
+        with open(srt_path, 'r', encoding='utf-8') as f:
+            srt_content = f.read()
+        
+        # استخدمنا نفس الإعدادات من server.py (خط Arial بحجم 42)
+        ass_content = convert_srt_to_ass(srt_content, font_name="Arial", font_size=42) [server.py]
+        
+        with open(ass_path, 'w', encoding='utf-8') as f:
+            f.write(ass_content)
+        print(f"ASS file created at: {ass_path}")
+    except Exception as e:
+        print(f"Error converting SRT to ASS: {e}")
+        # إذا فشل التحويل، عد إلى الطريقة القديمة كاحتياط
+        vf = f"subtitles={srt_path}:force_style='FontName=Arial,Outline=2,Shadow=0'" 
+    else:
+        # --- الفلتر الجديد ---
+        # استخدام فلتر ass مع تحديد مجلد الخطوط [server.py]
+        vf = f"ass='{ass_path}':fontsdir='{font_dir}'"
+
+    # الحفاظ على منطق NVENC الأصلي من handler.py
     if use_nvenc and ffmpeg_has_nvenc():
         cmd = [
             "ffmpeg", "-y", "-i", input_path,
-            "-vf", vf,
+            "-vf", vf, # <-- استخدام الفلتر المعدل
             "-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll",
             "-rc", "cbr", "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", "2M",
             "-c:a", "copy", output_path
@@ -69,11 +177,14 @@ def burn_subs(input_path, srt_path, output_path, use_nvenc=True, bitrate="8M"):
     else:
         cmd = [
             "ffmpeg", "-y", "-i", input_path,
-            "-vf", vf,
+            "-vf", vf, # <-- استخدام الفلتر المعدل
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             "-c:a", "copy", output_path
         ]
+    print(f"Executing FFmpeg command: {' '.join(cmd)}")
     subprocess.check_call(cmd)
+
+# ==================== دالة المعالج (لم تتغير) ====================
 
 def handler(event):
     t0 = time.time()
@@ -89,7 +200,6 @@ def handler(event):
     if (not video_url or not srt_url) and (not (video_key and srt_key)):
         raise ValueError("Pass either (video_url & srt_url) OR (video_key & srt_key).")
 
-    # لو وصلتنا مفاتيح R2 فقط، نولّد روابط قراءة مؤقتة
     if (not video_url or not srt_url) and (video_key and srt_key):
         assert s3 is not None, "R2 not configured to presign URLs."
         video_url = presigned_get_url(video_key, ttl=3600)
@@ -104,7 +214,7 @@ def handler(event):
     http_download(video_url, in_path)
     http_download(srt_url,   sub_path)
 
-    # الحرق
+    # الحرق (سيستخدم الآن الدالة المعدلة)
     try:
         burn_subs(in_path, sub_path, out_path, use_nvenc=True, bitrate=bitrate)
     except subprocess.CalledProcessError:
