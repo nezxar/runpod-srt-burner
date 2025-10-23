@@ -5,7 +5,7 @@ import runpod
 WORKDIR = "/workspace"
 os.makedirs(WORKDIR, exist_ok=True)
 
-# ---------- R2 CONFIG ----------
+# ---------- R2 CONFIG -----------
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
