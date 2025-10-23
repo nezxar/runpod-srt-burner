@@ -159,25 +159,29 @@ def handler(event):
 
     # منطق الرفع الجديد
     output_put_url = inp.get("output_put_url")
-    expected_output_key = inp.get("expected_output_key")
+    expected_output_key = inp.get("expected_output_key") # اختياري
 
     if output_put_url:
         # ارفع الناتج للـ PUT URL (لا يحتاج مفاتيح R2 داخل العامل)
         with open(out_path, "rb") as f:
             requests.put(output_put_url, data=f, headers={"Content-Type": "video/mp4"}, timeout=600)
-        download_url = None  # السيرفر يقدر يولّد read URL لاحقًا
-        output_key = expected_output_key
+        return {
+            "ok": True,
+            "output_key": expected_output_key,
+            "download_url": None, # السيرفر يقدر يولّد رابط القراءة لاحقاً
+            "exec_seconds": round(time.time() - t0, 2)
+        }
     else:
-        # المسار القديم: يتطلب تهيئة R2 داخل العامل
+        # المسار القديم المعتمد على R2 داخل العامل
+        assert s3 is not None, "R2 not configured"
         output_key = f"{out_prefix}/{int(time.time())}-{job}.mp4"
         upload_to_r2(out_path, output_key)
         download_url = presigned_get_url(output_key, ttl=3600)
-
-    return {
-        "ok": True,
-        "output_key": output_key,
-        "download_url": download_url,
-        "exec_seconds": round(time.time() - t0, 2)
-    }
+        return {
+            "ok": True,
+            "output_key": output_key,
+            "download_url": download_url,
+            "exec_seconds": round(time.time() - t0, 2)
+        }
 
 runpod.serverless.start({"handler": handler})
