@@ -46,20 +46,26 @@ def http_download(url, path):
 # ---------- GET VIDEO RESOLUTION ----------
 def get_video_resolution(video_path):
     """استخراج دقة الفيديو باستخدام ffprobe"""
-    cmd = [
-        "ffprobe", "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height",
-        "-of", "json",
-        video_path
-    ]
-    result = subprocess.check_output(cmd, text=True)
-    data = json.loads(result)
-    
-    if "streams" in data and len(data["streams"]) > 0:
-        width = int(data["streams"][0].get("width", 1280))
-        height = int(data["streams"][0].get("height", 720))
-        return width, height
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "json",
+            video_path
+        ]
+        result = subprocess.check_output(cmd, text=True)
+        data = json.loads(result)
+        
+        if "streams" in data and len(data["streams"]) > 0:
+            width = int(data["streams"][0].get("width", 1280))
+            height = int(data["streams"][0].get("height", 720))
+            # تأكد من الأبعاد الزوجية
+            width = width if width % 2 == 0 else width - 1
+            height = height if height % 2 == 0 else height - 1
+            return width, height
+    except:
+        pass
     return 1280, 720  # default fallback
 
 # ---------- TEXT WRAPPING ----------
@@ -93,9 +99,10 @@ def convert_srt_to_ass(srt_content, width, height, font_name="Arial"):
     تحويل SRT إلى ASS مع ضبط تلقائي لحجم الخط والهوامش بناءً على دقة الفيديو
     """
     # حساب حجم الخط بناءً على ارتفاع الفيديو
-    # القاعدة: كل 100 بكسل ارتفاع = 6 بكسل حجم خط تقريباً
-    font_size = max(32, int(height * 0.055))  # نسبة محسّنة للوضوح
-    margin_v = max(25, int(height * 0.05))     # الهامش السفلي
+    font_size = max(28, int(height * 0.055))  # نسبة محسّنة للوضوح
+    margin_v = max(20, int(height * 0.05))     # الهامش السفلي
+    outline = max(2.5, int(height * 0.004))    # سُمك الحدود
+    shadow = max(1, int(height * 0.002))       # الظلال
     
     style_header = f"""[Script Info]
 Title: Translated Subtitles
@@ -107,7 +114,7 @@ YCbCr Matrix: None
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,1.5,2,10,10,{margin_v},1
+Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,10,10,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -147,7 +154,7 @@ def burn_with_ass(input_path, srt_path, output_path):
     print(f"📹 Original resolution: {orig_width}x{orig_height}")
     
     # 2. تحديد دقة العمل (للحصول على نص واضح)
-    MIN_HEIGHT = 720  # الحد الأدنى لجودة النص
+    MIN_HEIGHT = 540  # الحد الأدنى لجودة النص (موازنة بين الجودة والسرعة)
     
     if orig_height < MIN_HEIGHT:
         # رفع الدقة مؤقتاً لضمان وضوح النص
@@ -162,7 +169,7 @@ def burn_with_ass(input_path, srt_path, output_path):
         work_width = orig_width
         work_height = orig_height
         upscaled = False
-        print(f"✅ Resolution sufficient, working at original size")
+        print(f"✅ Resolution sufficient ({orig_width}x{orig_height}), no upscaling needed")
     
     # 3. تحويل SRT إلى ASS بناءً على دقة العمل
     local_ass = os.path.splitext(srt_path)[0] + ".ass"
@@ -175,7 +182,8 @@ def burn_with_ass(input_path, srt_path, output_path):
     # 4. إعداد مجلد الخطوط
     fonts_dir = "/app/fonts"
     os.makedirs(fonts_dir, exist_ok=True)
-    shutil.copy("/app/arial.ttf", os.path.join(fonts_dir, "arial.ttf"))
+    if os.path.exists("/app/arial.ttf"):
+        shutil.copy("/app/arial.ttf", os.path.join(fonts_dir, "arial.ttf"))
     
     # 5. بناء الفلتر
     filters = []
@@ -187,10 +195,6 @@ def burn_with_ass(input_path, srt_path, output_path):
     # إضافة الترجمة
     filters.append(f"ass='{local_ass}':fontsdir='{fonts_dir}'")
     
-    # إعادة الفيديو لدقته الأصلية (اختياري - يمكنك تعطيله لتبقى الجودة عالية)
-    # if upscaled:
-    #     filters.append(f"scale={orig_width}:{orig_height}:flags=lanczos")
-    
     vf = ",".join(filters)
     
     # 6. تنفيذ FFmpeg
@@ -200,7 +204,7 @@ def burn_with_ass(input_path, srt_path, output_path):
         "-i", input_path,
         "-vf", vf,
         "-c:v", "h264_nvenc",
-        "-preset", "p3",
+        "-preset", "p2",  # p2 = أسرع من p3، جودة ممتازة
         "-b:v", "8M",
         "-c:a", "copy",
         output_path
@@ -235,7 +239,7 @@ def handler(event):
     # حرق الترجمة
     burn_with_ass(in_path, sub_path, out_path)
 
-    # منطق الرفع الجديد
+    # منطق الرفع
     output_put_url = inp.get("output_put_url")
     expected_output_key = inp.get("expected_output_key")
 
