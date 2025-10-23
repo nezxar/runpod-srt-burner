@@ -1,4 +1,4 @@
-import os, uuid, time, subprocess, requests, tempfile, shutil, re, boto3
+import os, uuid, time, subprocess, requests, tempfile, shutil, re, boto3, json
 from botocore.client import Config
 import runpod
 
@@ -43,6 +43,25 @@ def http_download(url, path):
             for chunk in r.iter_content(1024*1024):
                 if chunk: f.write(chunk)
 
+# ---------- GET VIDEO RESOLUTION ----------
+def get_video_resolution(video_path):
+    """استخراج دقة الفيديو باستخدام ffprobe"""
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "json",
+        video_path
+    ]
+    result = subprocess.check_output(cmd, text=True)
+    data = json.loads(result)
+    
+    if "streams" in data and len(data["streams"]) > 0:
+        width = int(data["streams"][0].get("width", 1280))
+        height = int(data["streams"][0].get("height", 720))
+        return width, height
+    return 1280, 720  # default fallback
+
 # ---------- TEXT WRAPPING ----------
 def intelligently_wrap_text(text, max_length=45, spacer_size=12, original_font_size=42):
     if len(text) <= max_length:
@@ -69,24 +88,34 @@ def intelligently_wrap_text(text, max_length=45, spacer_size=12, original_font_s
     return text
 
 # ---------- SRT -> ASS CONVERSION ----------
-def convert_srt_to_ass(srt_content, font_name="Arial", font_size=42):
+def convert_srt_to_ass(srt_content, width, height, font_name="Arial"):
+    """
+    تحويل SRT إلى ASS مع ضبط تلقائي لحجم الخط والهوامش بناءً على دقة الفيديو
+    """
+    # حساب حجم الخط بناءً على ارتفاع الفيديو
+    # القاعدة: كل 100 بكسل ارتفاع = 6 بكسل حجم خط تقريباً
+    font_size = max(32, int(height * 0.055))  # نسبة محسّنة للوضوح
+    margin_v = max(25, int(height * 0.05))     # الهامش السفلي
+    
     style_header = f"""[Script Info]
 Title: Translated Subtitles
 ScriptType: v4.00+
 WrapStyle: 0
-PlayResX: 1280
-PlayResY: 720
+PlayResX: {width}
+PlayResY: {height}
 YCbCr Matrix: None
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2.5,1,2,10,10,35,1
+Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,1.5,2,10,10,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     ass_lines = []
     srt_blocks = srt_content.strip().replace('\r', '').split('\n\n')
+    spacer_size = max(10, int(font_size * 0.28))
+    
     for block in srt_blocks:
         lines = block.strip().split('\n')
         if len(lines) < 3:
@@ -101,26 +130,70 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             end_s, end_ms = end_s_ms.split(',')
             end_ass = f"{int(end_h)}:{end_m}:{end_s}.{int(end_ms)//10:02d}"
             raw_text = ' '.join(lines[2:])
-            text = intelligently_wrap_text(raw_text, spacer_size=12, original_font_size=font_size)
+            text = intelligently_wrap_text(raw_text, spacer_size=spacer_size, original_font_size=font_size)
             ass_lines.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
         except ValueError:
             continue
     return style_header + "\n".join(ass_lines)
 
-# ---------- GPU HARDSUB ----------
+# ---------- GPU HARDSUB WITH SMART UPSCALING ----------
 def burn_with_ass(input_path, srt_path, output_path):
+    """
+    حرق الترجمة مع رفع الدقة التلقائي للفيديوهات ذات الجودة المنخفضة
+    لضمان وضوح النص حتى في الفيديوهات الضعيفة
+    """
+    # 1. كشف دقة الفيديو الأصلي
+    orig_width, orig_height = get_video_resolution(input_path)
+    print(f"📹 Original resolution: {orig_width}x{orig_height}")
+    
+    # 2. تحديد دقة العمل (للحصول على نص واضح)
+    MIN_HEIGHT = 720  # الحد الأدنى لجودة النص
+    
+    if orig_height < MIN_HEIGHT:
+        # رفع الدقة مؤقتاً لضمان وضوح النص
+        work_height = MIN_HEIGHT
+        work_width = int(orig_width * (work_height / orig_height))
+        # تأكد من أن الأبعاد زوجية (مطلوب لـ h264)
+        work_width = work_width if work_width % 2 == 0 else work_width + 1
+        work_height = work_height if work_height % 2 == 0 else work_height + 1
+        print(f"⬆️ Upscaling to {work_width}x{work_height} for better subtitle quality")
+        upscaled = True
+    else:
+        work_width = orig_width
+        work_height = orig_height
+        upscaled = False
+        print(f"✅ Resolution sufficient, working at original size")
+    
+    # 3. تحويل SRT إلى ASS بناءً على دقة العمل
     local_ass = os.path.splitext(srt_path)[0] + ".ass"
     with open(srt_path, "r", encoding="utf-8") as f:
         srt_content = f.read()
-    ass_content = convert_srt_to_ass(srt_content)
+    ass_content = convert_srt_to_ass(srt_content, work_width, work_height)
     with open(local_ass, "w", encoding="utf-8") as f:
         f.write(ass_content)
-
+    
+    # 4. إعداد مجلد الخطوط
     fonts_dir = "/app/fonts"
     os.makedirs(fonts_dir, exist_ok=True)
     shutil.copy("/app/arial.ttf", os.path.join(fonts_dir, "arial.ttf"))
-
-    vf = f"ass='{local_ass}':fontsdir='{fonts_dir}'"
+    
+    # 5. بناء الفلتر
+    filters = []
+    
+    # إذا كان الفيديو بحاجة إلى رفع دقة
+    if upscaled:
+        filters.append(f"scale={work_width}:{work_height}:flags=lanczos")
+    
+    # إضافة الترجمة
+    filters.append(f"ass='{local_ass}':fontsdir='{fonts_dir}'")
+    
+    # إعادة الفيديو لدقته الأصلية (اختياري - يمكنك تعطيله لتبقى الجودة عالية)
+    # if upscaled:
+    #     filters.append(f"scale={orig_width}:{orig_height}:flags=lanczos")
+    
+    vf = ",".join(filters)
+    
+    # 6. تنفيذ FFmpeg
     cmd = [
         "ffmpeg", "-y",
         "-hwaccel", "cuda",
@@ -132,7 +205,10 @@ def burn_with_ass(input_path, srt_path, output_path):
         "-c:a", "copy",
         output_path
     ]
+    
+    print(f"🔥 Burning subtitles with filter: {vf}")
     subprocess.check_call(cmd)
+    print(f"✅ Done! Output saved to {output_path}")
 
 # ---------- HANDLER ----------
 def handler(event):
@@ -151,7 +227,9 @@ def handler(event):
     out_path = os.path.join(WORKDIR, f"out_{job}.mp4")
 
     # تنزيل الملفات
+    print(f"⬇️ Downloading video from {video_url}")
     http_download(video_url, in_path)
+    print(f"⬇️ Downloading SRT from {srt_url}")
     http_download(srt_url, sub_path)
 
     # حرق الترجمة
@@ -159,22 +237,24 @@ def handler(event):
 
     # منطق الرفع الجديد
     output_put_url = inp.get("output_put_url")
-    expected_output_key = inp.get("expected_output_key") # اختياري
+    expected_output_key = inp.get("expected_output_key")
 
     if output_put_url:
-        # ارفع الناتج للـ PUT URL (لا يحتاج مفاتيح R2 داخل العامل)
+        # ارفع الناتج للـ PUT URL
+        print(f"⬆️ Uploading to PUT URL")
         with open(out_path, "rb") as f:
             requests.put(output_put_url, data=f, headers={"Content-Type": "video/mp4"}, timeout=600)
         return {
             "ok": True,
             "output_key": expected_output_key,
-            "download_url": None, # السيرفر يقدر يولّد رابط القراءة لاحقاً
+            "download_url": None,
             "exec_seconds": round(time.time() - t0, 2)
         }
     else:
-        # المسار القديم المعتمد على R2 داخل العامل
+        # المسار القديم المعتمد على R2
         assert s3 is not None, "R2 not configured"
         output_key = f"{out_prefix}/{int(time.time())}-{job}.mp4"
+        print(f"⬆️ Uploading to R2: {output_key}")
         upload_to_r2(out_path, output_key)
         download_url = presigned_get_url(output_key, ttl=3600)
         return {
