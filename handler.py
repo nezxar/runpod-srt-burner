@@ -1,4 +1,4 @@
-import os, uuid, time, subprocess, requests, tempfile, shutil, re, boto3, json
+import os, uuid, time, subprocess, requests, tempfile, shutil, re, boto3
 from botocore.client import Config
 import runpod
 
@@ -68,29 +68,19 @@ def intelligently_wrap_text(text, max_length=45, spacer_size=12, original_font_s
         return f"{line1}\\N{{\\fs{spacer_size}}}\\N{{\\fs{original_font_size}}}{line2}"
     return text
 
-# ---------- PROBE VIDEO SIZE ----------
-def probe_wh(path):
-    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
-           "-show_entries", "stream=width,height", "-of", "json", path]
-    info = subprocess.check_output(cmd)
-    data = json.loads(info)
-    w = data["streams"][0]["width"]
-    h = data["streams"][0]["height"]
-    return w, h
-
 # ---------- SRT -> ASS CONVERSION ----------
-def convert_srt_to_ass(srt_content, font_name="Arial", font_size=42, playres_w=1280, playres_h=720):
+def convert_srt_to_ass(srt_content, font_name="Arial", font_size=42):
     style_header = f"""[Script Info]
 Title: Translated Subtitles
 ScriptType: v4.00+
 WrapStyle: 0
-PlayResX: {playres_w}
-PlayResY: {playres_h}
+PlayResX: 1280
+PlayResY: 720
 YCbCr Matrix: None
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,3.5,2,2,10,10,{int(playres_h*0.05)},1
+Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2.5,1,2,10,10,35,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -112,7 +102,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             end_ass = f"{int(end_h)}:{end_m}:{end_s}.{int(end_ms)//10:02d}"
             raw_text = ' '.join(lines[2:])
             text = intelligently_wrap_text(raw_text, spacer_size=12, original_font_size=font_size)
-            # ملاحظة: ممكن إضافة \blur0.6 داخل النص عند الحاجة
             ass_lines.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
         except ValueError:
             continue
@@ -120,23 +109,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 # ---------- GPU HARDSUB ----------
 def burn_with_ass(input_path, srt_path, output_path):
-    # احصل على أبعاد الفيديو الفعلية واضبط PlayRes وحجم الخط تبعاً لها
-    w, h = probe_wh(input_path)
-
     local_ass = os.path.splitext(srt_path)[0] + ".ass"
     with open(srt_path, "r", encoding="utf-8") as f:
         srt_content = f.read()
-
-    # حجم خط نسبي لارتفاع الفيديو (لا يقل عن 28)
-    font_size = max(28, int(h * 0.055))
-
-    ass_content = convert_srt_to_ass(
-        srt_content,
-        font_name="Arial",
-        font_size=font_size,
-        playres_w=w,
-        playres_h=h
-    )
+    ass_content = convert_srt_to_ass(srt_content)
     with open(local_ass, "w", encoding="utf-8") as f:
         f.write(ass_content)
 
@@ -151,12 +127,8 @@ def burn_with_ass(input_path, srt_path, output_path):
         "-i", input_path,
         "-vf", vf,
         "-c:v", "h264_nvenc",
-        "-preset", "p4",          # توازن أفضل من p3
-        "-rc", "vbr",             # معدل متغير
-        "-cq", "19",              # جودة مستهدفة (أقرب لـ CRF)
-        "-b:v", "0",              # دع المُرَمِّز يحدد البتريت المناسب
-        "-profile:v", "high",
-        "-pix_fmt", "yuv420p",
+        "-preset", "p3",
+        "-b:v", "8M",
         "-c:a", "copy",
         output_path
     ]
