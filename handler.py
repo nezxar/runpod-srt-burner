@@ -112,6 +112,7 @@ ScriptType: v4.00+
 WrapStyle: 0
 PlayResX: {width}
 PlayResY: {height}
+ScaledBorderAndShadow: yes
 YCbCr Matrix: None
 
 [V4+ Styles]
@@ -191,22 +192,32 @@ def burn_with_ass(input_path, srt_path, output_path):
     
     # إذا كان الفيديو بحاجة إلى رفع دقة
     if upscaled:
+        # رفع الدقة بـ Lanczos (أفضل جودة)
         filters.append(f"scale={work_width}:{work_height}:flags=lanczos")
+        # إضافة unsharp خفيف لتحسين وضوح النص بعد الـ upscaling
+        filters.append("unsharp=5:5:0.8:5:5:0.0")
     
-    # إضافة الترجمة
-    filters.append(f"ass='{local_ass}':fontsdir='{fonts_dir}'")
+    # إضافة الترجمة مع تحسينات جودة الرسم
+    # shaping=simple: يحسن رسم الحروف العربية والإنجليزية
+    filters.append(f"ass='{local_ass}':fontsdir='{fonts_dir}':shaping=simple")
     
     vf = ",".join(filters)
     
-    # 6. تنفيذ FFmpeg
+    # 6. تنفيذ FFmpeg مع أفضل إعدادات جودة
     cmd = [
         "ffmpeg", "-y",
         "-hwaccel", "cuda",
         "-i", input_path,
         "-vf", vf,
         "-c:v", "h264_nvenc",
-        "-preset", "p2",  # p2 = سريع وجودة ممتازة
-        "-b:v", "8M",
+        "-preset", "p4",      # p4 = جودة أعلى (أبطأ قليلاً من p2 لكن أفضل)
+        "-rc", "vbr",         # Variable bitrate للجودة الأفضل
+        "-cq", "19",          # CQ (Constant Quality) = 19 (جودة عالية جداً، كلما قل الرقم = جودة أعلى)
+        "-b:v", "12M",        # متوسط bitrate
+        "-maxrate", "18M",    # الحد الأقصى
+        "-bufsize", "24M",    # حجم الـ buffer
+        "-spatial-aq", "1",   # Spatial AQ لتحسين جودة التفاصيل (مثل الخط)
+        "-temporal-aq", "1",  # Temporal AQ
         "-c:a", "copy",
         output_path
     ]
