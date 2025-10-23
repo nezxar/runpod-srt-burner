@@ -96,13 +96,15 @@ def intelligently_wrap_text(text, max_length=45, spacer_size=12, original_font_s
 # ---------- SRT -> ASS CONVERSION ----------
 def convert_srt_to_ass(srt_content, width, height, font_name="Arial"):
     """
-    تحويل SRT إلى ASS مع ضبط تلقائي لحجم الخط والهوامش بناءً على دقة الفيديو
+    تحويل SRT إلى ASS مع استخدام إعدادات 720p الثابتة لكل الفيديوهات
+    هذا يضمن جودة موحدة وممتازة للترجمة في كل الفيديوهات
     """
-    # حساب حجم الخط بناءً على ارتفاع الفيديو
-    font_size = max(28, int(height * 0.055))  # نسبة محسّنة للوضوح
-    margin_v = max(20, int(height * 0.05))     # الهامش السفلي
-    outline = max(2.5, int(height * 0.004))    # سُمك الحدود
-    shadow = max(1, int(height * 0.002))       # الظلال
+    # إعدادات ثابتة مثل 720p لجميع الفيديوهات (الإعدادات الأمثل)
+    font_size = 42      # حجم الخط الثابت (مثالي لـ 720p)
+    outline = 3.5       # حدود واضحة جداً
+    shadow = 1.8        # ظلال متوسطة للوضوح
+    margin_v = 35       # الهامش السفلي الثابت
+    spacer_size = 12    # حجم الفراغ بين السطور
     
     style_header = f"""[Script Info]
 Title: Translated Subtitles
@@ -121,7 +123,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     ass_lines = []
     srt_blocks = srt_content.strip().replace('\r', '').split('\n\n')
-    spacer_size = max(10, int(font_size * 0.28))
     
     for block in srt_blocks:
         lines = block.strip().split('\n')
@@ -143,35 +144,35 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             continue
     return style_header + "\n".join(ass_lines)
 
-# ---------- GPU HARDSUB WITH SMART UPSCALING ----------
+# ---------- GPU HARDSUB WITH 720P UPSCALING ----------
 def burn_with_ass(input_path, srt_path, output_path):
     """
-    حرق الترجمة مع رفع الدقة التلقائي للفيديوهات ذات الجودة المنخفضة
-    لضمان وضوح النص حتى في الفيديوهات الضعيفة
+    حرق الترجمة مع رفع الدقة إلى 720p للفيديوهات الأقل
+    لضمان أفضل جودة وأوضح نص للترجمة
     """
     # 1. كشف دقة الفيديو الأصلي
     orig_width, orig_height = get_video_resolution(input_path)
     print(f"📹 Original resolution: {orig_width}x{orig_height}")
     
-    # 2. تحديد دقة العمل (للحصول على نص واضح)
-    MIN_HEIGHT = 540  # الحد الأدنى لجودة النص (موازنة بين الجودة والسرعة)
+    # 2. رفع الدقة إلى 720p كحد أدنى لجودة الترجمة
+    MIN_HEIGHT = 720  # رفع كل الفيديوهات الأقل من 720p إلى 720p
     
     if orig_height < MIN_HEIGHT:
-        # رفع الدقة مؤقتاً لضمان وضوح النص
+        # رفع الدقة إلى 720p
         work_height = MIN_HEIGHT
         work_width = int(orig_width * (work_height / orig_height))
         # تأكد من أن الأبعاد زوجية (مطلوب لـ h264)
         work_width = work_width if work_width % 2 == 0 else work_width + 1
         work_height = work_height if work_height % 2 == 0 else work_height + 1
-        print(f"⬆️ Upscaling to {work_width}x{work_height} for better subtitle quality")
+        print(f"⬆️ Upscaling to {work_width}x{work_height} for crystal-clear subtitles")
         upscaled = True
     else:
         work_width = orig_width
         work_height = orig_height
         upscaled = False
-        print(f"✅ Resolution sufficient ({orig_width}x{orig_height}), no upscaling needed")
+        print(f"✅ Resolution is {orig_width}x{orig_height}, perfect for subtitles!")
     
-    # 3. تحويل SRT إلى ASS بناءً على دقة العمل
+    # 3. تحويل SRT إلى ASS باستخدام إعدادات 720p الثابتة
     local_ass = os.path.splitext(srt_path)[0] + ".ass"
     with open(srt_path, "r", encoding="utf-8") as f:
         srt_content = f.read()
@@ -204,7 +205,7 @@ def burn_with_ass(input_path, srt_path, output_path):
         "-i", input_path,
         "-vf", vf,
         "-c:v", "h264_nvenc",
-        "-preset", "p2",  # p2 = أسرع من p3، جودة ممتازة
+        "-preset", "p2",  # p2 = سريع وجودة ممتازة
         "-b:v", "8M",
         "-c:a", "copy",
         output_path
@@ -212,7 +213,7 @@ def burn_with_ass(input_path, srt_path, output_path):
     
     print(f"🔥 Burning subtitles with filter: {vf}")
     subprocess.check_call(cmd)
-    print(f"✅ Done! Output saved to {output_path}")
+    print(f"✅ Done! Crystal-clear subtitles ready!")
 
 # ---------- HANDLER ----------
 def handler(event):
