@@ -144,6 +144,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return style_header + "\n".join(ass_lines)
 
 # ---------- GPU HARDSUB WITH SMART UPSCALING ----------
+class GPUNotAvailableError(Exception):
+    """خطأ خاص عندما GPU غير متاح - لإعادة المحاولة على worker آخر"""
+    pass
+
 def burn_with_ass(input_path, srt_path, output_path):
     """
     حرق الترجمة مع رفع الدقة التلقائي للفيديوهات ذات الجودة المنخفضة
@@ -179,11 +183,16 @@ def burn_with_ass(input_path, srt_path, output_path):
     with open(local_ass, "w", encoding="utf-8") as f:
         f.write(ass_content)
     
+    print(f"📝 ASS file created: {local_ass}")
+    
     # 4. إعداد مجلد الخطوط
     fonts_dir = "/app/fonts"
     os.makedirs(fonts_dir, exist_ok=True)
     if os.path.exists("/app/arial.ttf"):
         shutil.copy("/app/arial.ttf", os.path.join(fonts_dir, "arial.ttf"))
+        print(f"✅ Font copied to {fonts_dir}")
+    else:
+        print(f"⚠️ Warning: /app/arial.ttf not found, using system fonts")
     
     # 5. بناء الفلتر
     filters = []
@@ -192,27 +201,50 @@ def burn_with_ass(input_path, srt_path, output_path):
     if upscaled:
         filters.append(f"scale={work_width}:{work_height}:flags=lanczos")
     
-    # إضافة الترجمة
-    filters.append(f"ass='{local_ass}':fontsdir='{fonts_dir}'")
+    # إضافة الترجمة - بدون علامات تنصيص في المسار
+    ass_filter = f"ass={local_ass}:fontsdir={fonts_dir}"
+    filters.append(ass_filter)
     
     vf = ",".join(filters)
     
-    # 6. تنفيذ FFmpeg
-    cmd = [
+    # 6. تنفيذ FFmpeg مع GPU
+    cmd_gpu = [
         "ffmpeg", "-y",
         "-hwaccel", "cuda",
         "-i", input_path,
         "-vf", vf,
         "-c:v", "h264_nvenc",
-        "-preset", "p2",  # p2 = أسرع من p3، جودة ممتازة
+        "-preset", "p2",
         "-b:v", "8M",
         "-c:a", "copy",
         output_path
     ]
     
-    print(f"🔥 Burning subtitles with filter: {vf}")
-    subprocess.check_call(cmd)
-    print(f"✅ Done! Output saved to {output_path}")
+    print(f"🔥 [GPU] Burning subtitles with filter: {vf}")
+    result = subprocess.run(
+        cmd_gpu,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False
+    )
+    
+    if result.returncode == 0:
+        print(f"✅ [GPU] Done! Output saved to {output_path}")
+        return
+    
+    # فحص نوع الخطأ
+    stderr_lower = result.stderr.lower()
+    if "cuda" in stderr_lower or "nvenc" in stderr_lower or "unsupported device" in stderr_lower or "no device" in stderr_lower:
+        print(f"❌ GPU not available on this worker")
+        print(f"Error: {result.stderr[-300:]}")
+        # رمي خطأ خاص ليعيد Runpod المحاولة على worker آخر
+        raise GPUNotAvailableError("GPU not available, need different worker")
+    else:
+        # خطأ آخر غير متعلق بـ GPU
+        print(f"❌ Encoding failed with error:")
+        print(result.stderr[-1000:] if len(result.stderr) > 1000 else result.stderr)
+        raise subprocess.CalledProcessError(result.returncode, cmd_gpu, output=result.stdout, stderr=result.stderr)
 
 # ---------- HANDLER ----------
 def handler(event):
@@ -230,42 +262,52 @@ def handler(event):
     sub_path = os.path.join(WORKDIR, f"sub_{job}.srt")
     out_path = os.path.join(WORKDIR, f"out_{job}.mp4")
 
-    # تنزيل الملفات
-    print(f"⬇️ Downloading video from {video_url}")
-    http_download(video_url, in_path)
-    print(f"⬇️ Downloading SRT from {srt_url}")
-    http_download(srt_url, sub_path)
+    try:
+        # تنزيل الملفات
+        print(f"⬇️ Downloading video from {video_url}")
+        http_download(video_url, in_path)
+        print(f"⬇️ Downloading SRT from {srt_url}")
+        http_download(srt_url, sub_path)
 
-    # حرق الترجمة
-    burn_with_ass(in_path, sub_path, out_path)
+        # حرق الترجمة
+        burn_with_ass(in_path, sub_path, out_path)
 
-    # منطق الرفع
-    output_put_url = inp.get("output_put_url")
-    expected_output_key = inp.get("expected_output_key")
+        # منطق الرفع
+        output_put_url = inp.get("output_put_url")
+        expected_output_key = inp.get("expected_output_key")
 
-    if output_put_url:
-        # ارفع الناتج للـ PUT URL
-        print(f"⬆️ Uploading to PUT URL")
-        with open(out_path, "rb") as f:
-            requests.put(output_put_url, data=f, headers={"Content-Type": "video/mp4"}, timeout=600)
+        if output_put_url:
+            # ارفع الناتج للـ PUT URL
+            print(f"⬆️ Uploading to PUT URL")
+            with open(out_path, "rb") as f:
+                requests.put(output_put_url, data=f, headers={"Content-Type": "video/mp4"}, timeout=600)
+            return {
+                "ok": True,
+                "output_key": expected_output_key,
+                "download_url": None,
+                "exec_seconds": round(time.time() - t0, 2)
+            }
+        else:
+            # المسار القديم المعتمد على R2
+            assert s3 is not None, "R2 not configured"
+            output_key = f"{out_prefix}/{int(time.time())}-{job}.mp4"
+            print(f"⬆️ Uploading to R2: {output_key}")
+            upload_to_r2(out_path, output_key)
+            download_url = presigned_get_url(output_key, ttl=3600)
+            return {
+                "ok": True,
+                "output_key": output_key,
+                "download_url": download_url,
+                "exec_seconds": round(time.time() - t0, 2)
+            }
+    
+    except GPUNotAvailableError as e:
+        # GPU غير متاح - طلب إعادة المحاولة على worker آخر
+        print(f"🔄 GPU not available, requesting different worker")
         return {
-            "ok": True,
-            "output_key": expected_output_key,
-            "download_url": None,
-            "exec_seconds": round(time.time() - t0, 2)
-        }
-    else:
-        # المسار القديم المعتمد على R2
-        assert s3 is not None, "R2 not configured"
-        output_key = f"{out_prefix}/{int(time.time())}-{job}.mp4"
-        print(f"⬆️ Uploading to R2: {output_key}")
-        upload_to_r2(out_path, output_key)
-        download_url = presigned_get_url(output_key, ttl=3600)
-        return {
-            "ok": True,
-            "output_key": output_key,
-            "download_url": download_url,
-            "exec_seconds": round(time.time() - t0, 2)
+            "error": str(e),
+            "error_type": "GPU_NOT_AVAILABLE",
+            "refresh_worker": True  # يطلب من Runpod إعادة المحاولة على worker آخر
         }
 
 runpod.serverless.start({"handler": handler})
