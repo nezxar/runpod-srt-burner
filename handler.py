@@ -100,9 +100,9 @@ def convert_srt_to_ass(srt_content, width, height, font_name="Arial"):
     """
     # حساب حجم الخط بناءً على ارتفاع الفيديو
     font_size = max(28, int(height * 0.055))  # نسبة محسّنة للوضوح
-    margin_v = max(20, int(height * 0.05))     # الهامش السفلي
-    outline = max(2.5, int(height * 0.004))    # سُمك الحدود
-    shadow = max(1, int(height * 0.002))       # الظلال
+    margin_v = max(20, int(height * 0.05))   # الهامش السفلي
+    outline = max(2.5, int(height * 0.004))  # سُمك الحدود
+    shadow = max(1, int(height * 0.002))     # الظلال
     
     style_header = f"""[Script Info]
 Title: Translated Subtitles
@@ -158,7 +158,7 @@ def burn_with_ass(input_path, srt_path, output_path):
     print(f"📹 Original resolution: {orig_width}x{orig_height}")
     
     # 2. تحديد دقة العمل (للحصول على نص واضح)
-    MIN_HEIGHT = 1080  # الحد الأدنى لجودة النص (1080p لوضوح ممتاز)
+    MIN_HEIGHT = 720  #  <-- ✅ تم التعديل هنا
     
     if orig_height < MIN_HEIGHT:
         # رفع الدقة مؤقتاً لضمان وضوح النص
