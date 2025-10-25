@@ -76,10 +76,9 @@ def convert_srt_to_ass(srt_content, width, height, font_name="Arial"):
     تحويل SRT إلى ASS مع ضبط تلقائي لحجم الخط والهوامش بناءً على دقة الفيديو
     """
     # حساب حجم الخط بناءً على ارتفاع الفيديو
-    # (تم التعديل) زيادة حجم الخط
     font_size = max(32, int(height * 0.065))
-    # (تم التعديل) زيادة الهامش السفلي لرفع النص للأعلى
-    margin_v = max(30, int(height * 0.08))
+    # (تم التعديل) زيادة الهامش السفلي لرفع النص للأعلى أكثر
+    margin_v = max(45, int(height * 0.12))
     outline = max(2.5, int(height * 0.004))   # سُمك الحدود
     shadow = max(1, int(height * 0.002))      # الظلال
     
@@ -294,3 +293,4 @@ def handler(event):
         }
 
 runpod.serverless.start({"handler": handler})
+
