@@ -68,30 +68,7 @@ def get_video_resolution(video_path):
         pass
     return 1280, 720  # default fallback
 
-# ---------- TEXT WRAPPING ----------
-def intelligently_wrap_text(text, max_length=45, spacer_size=12, original_font_size=42):
-    if len(text) <= max_length:
-        return text
-    words = text.split(' ')
-    if not words or len(words) == 1:
-        return text
-    mid_point = len(text) // 2
-    best_split_index = -1
-    min_distance_from_mid = float('inf')
-    current_pos = 0
-    for i, word in enumerate(words):
-        if i < len(words) - 1:
-            split_candidate_pos = current_pos + len(word)
-            distance = abs(split_candidate_pos - mid_point)
-            if distance < min_distance_from_mid:
-                min_distance_from_mid = distance
-                best_split_index = i + 1
-        current_pos += len(word) + 1
-    if best_split_index != -1:
-        line1 = ' '.join(words[:best_split_index])
-        line2 = ' '.join(words[best_split_index:])
-        return f"{line1}\\N{{\\fs{spacer_size}}}\\N{{\\fs{original_font_size}}}{line2}"
-    return text
+# ---------- (تمت إزالة التقسيم الذكي بناءً على طلبك) ----------
 
 # ---------- SRT -> ASS CONVERSION ----------
 def convert_srt_to_ass(srt_content, width, height, font_name="Arial"):
@@ -99,10 +76,12 @@ def convert_srt_to_ass(srt_content, width, height, font_name="Arial"):
     تحويل SRT إلى ASS مع ضبط تلقائي لحجم الخط والهوامش بناءً على دقة الفيديو
     """
     # حساب حجم الخط بناءً على ارتفاع الفيديو
-    font_size = max(28, int(height * 0.055))  # نسبة محسّنة للوضوح
-    margin_v = max(20, int(height * 0.05))     # الهامش السفلي
-    outline = max(2.5, int(height * 0.004))    # سُمك الحدود
-    shadow = max(1, int(height * 0.002))       # الظلال
+    # (تم التعديل) زيادة حجم الخط
+    font_size = max(32, int(height * 0.065))
+    # (تم التعديل) زيادة الهامش السفلي لرفع النص للأعلى
+    margin_v = max(30, int(height * 0.08))
+    outline = max(2.5, int(height * 0.004))   # سُمك الحدود
+    shadow = max(1, int(height * 0.002))      # الظلال
     
     style_header = f"""[Script Info]
 Title: Translated Subtitles
@@ -121,7 +100,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     ass_lines = []
     srt_blocks = srt_content.strip().replace('\r', '').split('\n\n')
-    spacer_size = max(10, int(font_size * 0.28))
+    
+    # (تمت إزالة) spacer_size لأن التقسيم الذكي أُزيل
     
     for block in srt_blocks:
         lines = block.strip().split('\n')
@@ -136,8 +116,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             end_h, end_m, end_s_ms = end_str.split(':')
             end_s, end_ms = end_s_ms.split(',')
             end_ass = f"{int(end_h)}:{end_m}:{end_s}.{int(end_ms)//10:02d}"
-            raw_text = ' '.join(lines[2:])
-            text = intelligently_wrap_text(raw_text, spacer_size=spacer_size, original_font_size=font_size)
+            
+            # (تم التعديل) استخدام فواصل الأسطر الأصلية بدلاً من التقسيم الذكي
+            raw_text = r'\N'.join(lines[2:])
+            text = raw_text # استخدام النص كما هو
+            
             ass_lines.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
         except ValueError:
             continue
